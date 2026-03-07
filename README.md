@@ -1,5 +1,10 @@
 # fakepbx
 
+[![CI](https://github.com/x-phone/fakepbx-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/x-phone/fakepbx-rust/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/fakepbx.svg)](https://crates.io/crates/fakepbx)
+[![docs.rs](https://docs.rs/fakepbx/badge.svg)](https://docs.rs/fakepbx)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 In-process SIP server (UAS) for testing — no Docker, no external processes, no hardcoded ports.
 
 Rust port of [github.com/x-phone/fakepbx](https://github.com/x-phone/fakepbx).
