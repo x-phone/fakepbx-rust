@@ -646,7 +646,7 @@ mod tests {
         let nonce = sip::extract_digest_param(www_auth, "nonce").unwrap();
 
         // Compute digest response.
-        let ha1 = md5_hex(&format!("alice:fakepbx:secret"));
+        let ha1 = md5_hex("alice:fakepbx:secret");
         let uri = format!("sip:{}", pbx.addr());
         let ha2 = md5_hex(&format!("REGISTER:{}", uri));
         let digest_response = md5_hex(&format!("{}:{}:{}", ha1, nonce, ha2));
