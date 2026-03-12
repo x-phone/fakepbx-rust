@@ -468,8 +468,7 @@ impl FakePBX {
     /// automatically and returns an `OutboundCall` for in-dialog control.
     pub fn send_invite(&self, target: &str, sdp_body: &str) -> Result<OutboundCall, String> {
         // Dedicated socket for this outbound transaction (avoids racing the server loop).
-        let sock = UdpSocket::bind("127.0.0.1:0")
-            .map_err(|e| format!("bind failed: {e}"))?;
+        let sock = UdpSocket::bind("127.0.0.1:0").map_err(|e| format!("bind failed: {e}"))?;
         let local_addr = sock
             .local_addr()
             .map_err(|e| format!("local_addr failed: {e}"))?
@@ -492,8 +491,8 @@ impl FakePBX {
             req.body = sdp_body.to_string();
         }
 
-        let target_addr = parse_sip_host_port(target)
-            .ok_or_else(|| format!("invalid SIP URI: {target}"))?;
+        let target_addr =
+            parse_sip_host_port(target).ok_or_else(|| format!("invalid SIP URI: {target}"))?;
 
         sock.send_to(&req.to_bytes(), &target_addr)
             .map_err(|e| format!("send failed: {e}"))?;
@@ -519,9 +518,8 @@ impl FakePBX {
                     sip::generate_branch()
                 );
                 let ack_to = msg.header("To").unwrap_or("").to_string();
-                let mut ack = sip::new_dialog_request(
-                    "ACK", target, &call_id, &from, &ack_to, &ack_via, 1,
-                );
+                let mut ack =
+                    sip::new_dialog_request("ACK", target, &call_id, &from, &ack_to, &ack_via, 1);
                 ack.add_header("Contact", &format!("<sip:{}>", self.addr));
                 let _ = sock.send_to(&ack.to_bytes(), &target_addr);
                 return Err(format!("{} {}", msg.status_code, msg.reason));
@@ -584,8 +582,7 @@ impl FakePBX {
     where
         F: FnOnce(&mut sip::SipMessage),
     {
-        let sock = UdpSocket::bind("127.0.0.1:0")
-            .map_err(|e| format!("bind failed: {e}"))?;
+        let sock = UdpSocket::bind("127.0.0.1:0").map_err(|e| format!("bind failed: {e}"))?;
         let local_addr = sock
             .local_addr()
             .map_err(|e| format!("local_addr failed: {e}"))?
@@ -605,8 +602,8 @@ impl FakePBX {
         req.add_header("Contact", &format!("<sip:{}>", self.addr));
         customize(&mut req);
 
-        let target_addr = parse_sip_host_port(target)
-            .ok_or_else(|| format!("invalid SIP URI: {target}"))?;
+        let target_addr =
+            parse_sip_host_port(target).ok_or_else(|| format!("invalid SIP URI: {target}"))?;
 
         sock.send_to(&req.to_bytes(), &target_addr)
             .map_err(|e| format!("send failed: {e}"))?;
@@ -1140,8 +1137,7 @@ mod tests {
     /// in-dialog requests it sends will arrive on this socket after the 200 OK.
     fn invite_and_answer(pbx_addr: &str, call_id: &str, from_tag: &str) -> UdpSocket {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let addr: SocketAddr = pbx_addr.parse().unwrap();
         let local = sock.local_addr().unwrap();
         let branch = sip::generate_branch();
@@ -1278,7 +1274,8 @@ mod tests {
             inv.trying();
             let ac = inv.answer(&sdp::sdp("127.0.0.1", 20000, &[sdp::PCMU]));
             if let Some(ac) = ac {
-                let hold_sdp = sdp::sdp_with_direction("127.0.0.1", 20000, "sendonly", &[sdp::PCMU]);
+                let hold_sdp =
+                    sdp::sdp_with_direction("127.0.0.1", 20000, "sendonly", &[sdp::PCMU]);
                 *result2.lock() = Some(ac.send_reinvite(&hold_sdp));
             }
         });
@@ -1401,8 +1398,7 @@ mod tests {
         );
 
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let addr: SocketAddr = pbx.addr().parse().unwrap();
         sock.send_to(invite.as_bytes(), addr).unwrap();
 
@@ -1437,9 +1433,7 @@ mod tests {
 
     /// Helper: a minimal "remote UA" that accepts an INVITE and returns 200 OK.
     /// Returns the socket for further in-dialog interaction.
-    fn spawn_remote_ua_accept(
-        sdp_body: &str,
-    ) -> (String, std::thread::JoinHandle<UdpSocket>) {
+    fn spawn_remote_ua_accept(sdp_body: &str) -> (String, std::thread::JoinHandle<UdpSocket>) {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = sock.local_addr().unwrap().to_string();
         let sdp_body = sdp_body.to_string();
@@ -1473,10 +1467,7 @@ mod tests {
     }
 
     /// Helper: a minimal "remote UA" that rejects an INVITE.
-    fn spawn_remote_ua_reject(
-        code: u16,
-        reason: &str,
-    ) -> (String, std::thread::JoinHandle<()>) {
+    fn spawn_remote_ua_reject(code: u16, reason: &str) -> (String, std::thread::JoinHandle<()>) {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = sock.local_addr().unwrap().to_string();
         let reason = reason.to_string();
@@ -1836,8 +1827,7 @@ mod tests {
         );
 
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let addr: SocketAddr = pbx.addr().parse().unwrap();
         sock.send_to(invite.as_bytes(), addr).unwrap();
 
