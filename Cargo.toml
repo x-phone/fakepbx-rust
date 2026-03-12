@@ -1,8 +1,8 @@
 [package]
 name = "fakepbx"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "In-process SIP server (UAS) for testing — Rust port of github.com/x-phone/fakepbx"
+description = "In-process SIP server (UAS + UAC) for testing — Rust port of github.com/x-phone/fakepbx"
 license = "MIT"
 
 [dependencies]
