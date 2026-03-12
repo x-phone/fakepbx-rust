@@ -5,7 +5,7 @@
 [![docs.rs](https://docs.rs/fakepbx/badge.svg)](https://docs.rs/fakepbx)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-In-process SIP server (UAS) for testing — no Docker, no external processes, no hardcoded ports.
+In-process SIP server (UAS + UAC) for testing — no Docker, no external processes, no hardcoded ports.
 
 Rust port of [github.com/x-phone/fakepbx](https://github.com/x-phone/fakepbx).
 
@@ -82,7 +82,7 @@ pbx.on_invite(|inv| {
 });
 ```
 
-## ActiveCall (PBX-initiated actions)
+## ActiveCall (In-Dialog Actions)
 
 ```rust
 pbx.on_invite(|inv| {
@@ -93,7 +93,38 @@ pbx.on_invite(|inv| {
     // PBX hangs up after 2 seconds.
     std::thread::sleep(std::time::Duration::from_secs(2));
     ac.send_bye().unwrap();
+
+    // Or: hold, transfer, notify.
+    // ac.send_reinvite(&sdp::sdp_with_direction("127.0.0.1", 20000, "sendonly", &[sdp::PCMU]));
+    // ac.send_refer("<sip:1003@127.0.0.1>");
+    // ac.send_notify("refer", "SIP/2.0 200 OK");
 });
+```
+
+## Outbound INVITE (UAC)
+
+```rust
+// PBX initiates a call to a remote SIP UA.
+let oc = pbx.send_invite("sip:1002@127.0.0.1:5060", &sdp::sdp("127.0.0.1", 20000, &[sdp::PCMU]))
+    .unwrap();
+
+// Access the sent request and received response.
+assert_eq!(oc.response().status_code, 200);
+
+// In-dialog actions work the same as ActiveCall.
+oc.send_bye().unwrap();
+```
+
+## Out-of-Dialog Requests
+
+```rust
+// Send a MESSAGE.
+let code = pbx.send_message("sip:alice@127.0.0.1:5060", "text/plain", "hello").unwrap();
+assert_eq!(code, 200);
+
+// Send an OPTIONS ping.
+let code = pbx.send_options("sip:server@127.0.0.1:5060").unwrap();
+assert_eq!(code, 200);
 ```
 
 ## Request Inspection

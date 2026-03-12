@@ -153,6 +153,27 @@ impl Invite {
         ))
     }
 
+    /// Sends an arbitrary response with optional extra headers.
+    ///
+    /// Provisional responses (1xx) can be sent multiple times.
+    /// Final responses (2xx+) can only be sent once.
+    pub fn respond(&self, code: u16, reason: &str, headers: &[(&str, &str)]) {
+        if code >= 200 {
+            if self.responded_final.swap(true, Ordering::SeqCst) {
+                return;
+            }
+        } else if self.responded_final.load(Ordering::SeqCst) {
+            // Don't send provisionals after a final response.
+            return;
+        }
+        let mut resp = self.build_response(code, reason);
+        resp.add_header("Contact", &format!("<sip:{}>", self.local_addr));
+        for (name, value) in headers {
+            resp.add_header(name, value);
+        }
+        let _ = self.socket.send_to(&resp.to_bytes(), self.remote);
+    }
+
     /// Sends a non-2xx final response (e.g. 486 Busy Here).
     pub fn reject(&self, code: u16, reason: &str) {
         if self.responded_final.swap(true, Ordering::SeqCst) {
@@ -210,25 +231,27 @@ impl Invite {
 }
 
 // ---------------------------------------------------------------------------
-// ActiveCall
+// DialogCall — shared base for in-dialog requests (ActiveCall, OutboundCall)
 // ---------------------------------------------------------------------------
 
-/// Handle for an established call, returned by `Invite::answer()`.
+/// Shared state and methods for an established SIP dialog.
 ///
-/// Allows the PBX to send in-dialog requests (BYE, re-INVITE, NOTIFY).
-pub struct ActiveCall {
+/// Both [`ActiveCall`] (UAS-side) and [`OutboundCall`] (UAC-side) delegate
+/// in-dialog request methods (BYE, re-INVITE, REFER, NOTIFY) to this type.
+pub struct DialogCall {
     socket: Arc<UdpSocket>,
     remote: SocketAddr,
     local_addr: String,
     call_id: String,
-    from: String, // PBX's From (was the To in the original INVITE)
-    to: String,   // Remote's To (was the From in the original INVITE)
+    from: String,
+    to: String,
     remote_contact: String,
     cseq: AtomicU32,
 }
 
-impl ActiveCall {
-    fn new(
+impl DialogCall {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
         socket: Arc<UdpSocket>,
         remote: SocketAddr,
         local_addr: String,
@@ -236,6 +259,7 @@ impl ActiveCall {
         from: String,
         to: String,
         remote_contact: String,
+        initial_cseq: u32,
     ) -> Self {
         Self {
             socket,
@@ -245,11 +269,11 @@ impl ActiveCall {
             from,
             to,
             remote_contact,
-            cseq: AtomicU32::new(1000),
+            cseq: AtomicU32::new(initial_cseq),
         }
     }
 
-    /// Sends BYE to hang up the call from the PBX side.
+    /// Sends BYE to hang up the call.
     /// Returns the response status code, or an error.
     pub fn send_bye(&self) -> Result<u16, String> {
         let cseq = self.cseq.fetch_add(1, Ordering::SeqCst);
@@ -296,6 +320,29 @@ impl ActiveCall {
         self.send_and_wait_response(&req)
     }
 
+    /// Sends a REFER request for call transfer.
+    pub fn send_refer(&self, refer_to: &str) -> Result<u16, String> {
+        let cseq = self.cseq.fetch_add(1, Ordering::SeqCst);
+        let via = format!(
+            "SIP/2.0/UDP {};branch={}",
+            self.local_addr,
+            sip::generate_branch()
+        );
+        let mut req = sip::new_dialog_request(
+            "REFER",
+            &self.remote_contact,
+            &self.call_id,
+            &self.from,
+            &self.to,
+            &via,
+            cseq,
+        );
+        req.add_header("Refer-To", refer_to);
+        req.add_header("Contact", &format!("<sip:{}>", self.local_addr));
+
+        self.send_and_wait_response(&req)
+    }
+
     /// Sends a NOTIFY request (e.g. for REFER progress).
     pub fn send_notify(&self, event: &str, body: &str) -> Result<u16, String> {
         let cseq = self.cseq.fetch_add(1, Ordering::SeqCst);
@@ -327,24 +374,141 @@ impl ActiveCall {
             .send_to(&req.to_bytes(), self.remote)
             .map_err(|e| format!("send failed: {}", e))?;
 
-        // Wait for response with timeout.
-        let mut buf = [0u8; 4096];
+        // Save and restore the read timeout to avoid mutating the shared socket.
+        let prev_timeout = self.socket.read_timeout().ok().flatten();
         self.socket
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .ok();
-        loop {
+        let mut buf = [0u8; 4096];
+        let result = loop {
             match self.socket.recv_from(&mut buf) {
                 Ok((n, _)) => {
                     if let Some(msg) = sip::parse(&buf[..n]) {
                         if !msg.is_request() {
-                            return Ok(msg.status_code);
+                            break Ok(msg.status_code);
                         }
                         // Skip requests (e.g. incoming BYE crossing), keep waiting.
                     }
                 }
-                Err(e) => return Err(format!("recv timeout: {}", e)),
+                Err(e) => break Err(format!("recv timeout: {}", e)),
             }
+        };
+        self.socket.set_read_timeout(prev_timeout).ok();
+        result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ActiveCall
+// ---------------------------------------------------------------------------
+
+/// Handle for an established call, returned by `Invite::answer()`.
+///
+/// Allows the PBX to send in-dialog requests (BYE, re-INVITE, REFER, NOTIFY).
+pub struct ActiveCall {
+    inner: DialogCall,
+}
+
+impl ActiveCall {
+    pub(crate) fn new(
+        socket: Arc<UdpSocket>,
+        remote: SocketAddr,
+        local_addr: String,
+        call_id: String,
+        from: String,
+        to: String,
+        remote_contact: String,
+    ) -> Self {
+        Self {
+            inner: DialogCall::new(
+                socket,
+                remote,
+                local_addr,
+                call_id,
+                from,
+                to,
+                remote_contact,
+                1000,
+            ),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OutboundCall
+// ---------------------------------------------------------------------------
+
+/// Handle for an outbound call initiated by `FakePBX::send_invite()`.
+///
+/// Allows the PBX to send in-dialog requests (BYE, re-INVITE, REFER, NOTIFY)
+/// on a call that the PBX originated.
+pub struct OutboundCall {
+    inner: DialogCall,
+    request: SipMessage,
+    response: SipMessage,
+}
+
+impl OutboundCall {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        socket: Arc<UdpSocket>,
+        remote: SocketAddr,
+        local_addr: String,
+        call_id: String,
+        from: String,
+        to: String,
+        remote_contact: String,
+        initial_cseq: u32,
+        request: SipMessage,
+        response: SipMessage,
+    ) -> Self {
+        Self {
+            inner: DialogCall::new(
+                socket,
+                remote,
+                local_addr,
+                call_id,
+                from,
+                to,
+                remote_contact,
+                initial_cseq,
+            ),
+            request,
+            response,
+        }
+    }
+
+    /// Returns the original INVITE request that was sent.
+    pub fn request(&self) -> &SipMessage {
+        &self.request
+    }
+
+    /// Returns the 2xx response received from the remote.
+    pub fn response(&self) -> &SipMessage {
+        &self.response
+    }
+}
+
+impl std::ops::Deref for OutboundCall {
+    type Target = DialogCall;
+    fn deref(&self) -> &DialogCall {
+        &self.inner
+    }
+}
+
+impl std::fmt::Debug for OutboundCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundCall")
+            .field("request", &self.request.method)
+            .field("response", &self.response.status_code)
+            .finish()
+    }
+}
+
+impl std::ops::Deref for ActiveCall {
+    type Target = DialogCall;
+    fn deref(&self) -> &DialogCall {
+        &self.inner
     }
 }
 
